@@ -1,0 +1,686 @@
+// ===== Config =====
+const SHEET_ID = '1vua0b46ZMEf4uDEAzf8Wb8AaDKrYUnRyLR700_UoC_I';
+const ATTENDANCE_SHEET_NAME = 'Check-In';
+const EMPLOYEE_SHEET_NAME = 'Employees';
+const HR_SHEET_NAME = 'HR'; // ✨ [เพิ่ม] ชื่อชีต HR
+const DRIVE_FOLDER_ID = '1fItGmdoc7aTJZmAOyCY1ol70M0iRy_Hh'; // โฟลเดอร์เก็บรูปใน Google Drive
+
+// ===== Utilities =====
+function createJsonResponse(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getSheetDataAsObjects(sheet) {
+  if (!sheet) return [];
+  const lastCol = sheet.getLastColumn();
+  const lastRow = sheet.getLastRow();
+
+  // ถ้าชีตว่าง หรือมีแค่หัว (แถว 1) ก็ไม่ต้องทำต่อ
+  if (lastRow < 2) return []; 
+
+const data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+
+  const headers = data.shift();
+  return data.map((row) => {
+    const obj = {};
+    headers.forEach((header, i) => {
+      const v = row[i];
+
+      if (v instanceof Date) {
+        if (header === 'checkIn' || header === 'checkOut') {
+          obj[header] = Utilities.formatDate(v, 'GMT+7', 'HH:mm');
+        } else if (header === 'date') {
+          obj[header] = Utilities.formatDate(v, 'GMT+7', 'yyyy-MM-dd');
+        } else {
+          obj[header] = v.toISOString();
+        }
+      } else {
+        obj[header] = v;
+      }
+    });
+    return obj;
+  });
+}
+
+/**
+ * เติมหัวคอลัมน์ที่จำเป็น หากในชีตยังไม่มี (จะเพิ่มต่อท้าย)
+ */
+/**
+ * เติมหัวคอลัมน์ที่จำเป็น หากในชีตยังไม่มี (จะเพิ่มต่อท้าย)
+ * * [FIXED] - แก้ไขการอ่าน headers เพื่อไม่ให้ 'filter' ลบคอลัมน์ว่างตรงกลาง
+ * ซึ่งเป็นสาเหตุของข้อมูลไม่ตรงคอลัมน์ (Column Mismatch)
+ */
+function ensureHeaders(sheet, requiredHeaders) {
+  let headers;
+  
+  if (sheet.getLastRow() === 0) {
+    // --- 1. กรณีชีตว่างเปล่า ---
+    headers = [];
+  } else {
+    // --- 2. กรณีชีตมีข้อมูล ---
+    // อ่านค่าหัวแถวที่ 1 มาทั้งหมด โดยไม่ filter
+    const lastCol = Math.max(1, sheet.getLastColumn());
+    headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    
+    // [FIX] เราจะลบเฉพาะ "คอลัมน์ว่าง" ที่อยู่ "ต่อท้าย" ออกเท่านั้น
+    // เราจะไม่แตะต้องคอลัมน์ว่างที่อยู่ "ตรงกลาง"
+    while (headers.length > 0 && String(headers[headers.length - 1]).trim() === '') {
+      headers.pop();
+    }
+  }
+
+  // --- 3. (เหมือนเดิม) เติม header ใหม่ที่ยังไม่มี ต่อท้ายไป ---
+  let hasNewHeader = false;
+  requiredHeaders.forEach(h => {
+    if (headers.indexOf(h) === -1) {
+      headers.push(h);
+      hasNewHeader = true; // ตั้งค่าสถานะว่ามีการเพิ่มหัวข้อใหม่
+    }
+  });
+
+  // --- 4. (เหมือนเดิม) เขียน headers ที่อัปเดตแล้ว กลับไปที่ชีต ---
+  // [FIX] เพิ่มเงื่อนไขให้เขียนกลับเฉพาะเมื่อมีการเปลี่ยนแปลง
+  // หรือเมื่อชีตว่างเปล่าในตอนแรก (headers.length > 0)
+  if (hasNewHeader || sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
+  
+  return headers;
+}
+
+// --- ✨ [เพิ่มฟังก์ชันนี้] (คัดลอกจาก script.js) ---
+// เพื่อให้ doPost (action: delete) ทำงานเปรียบเทียบวันที่ได้ถูกต้อง
+function normalizeDateStr(input) {
+  if (!input) return '';
+  // ถ้าเป็น YYYY-MM-DD อยู่แล้ว
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input;
+
+  // MM/DD/YYYY หรือ DD/MM/YYYY
+  const m = String(input).match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (m) {
+    let a = parseInt(m[1],10), b = parseInt(m[2],10), y = m[3];
+    if (y.length === 2) y = '20' + y;
+    // ถ้า a>12 แปลว่าเป็น DD/MM/YYYY
+    let month = (a > 12) ? b : a;
+    let day   = (a > 12) ? a : b;
+    return `${y}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+  }
+
+  // กรณีเป็นสตริงวันที่อื่น ๆ
+  try {
+    const d = new Date(input);
+    if (!isNaN(d)) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const day = String(d.getDate()).padStart(2,'0');
+      return `${y}-${m}-${day}`;
+    }
+  } catch (e) {}
+  return '';
+}
+// --- ✨ [จบฟังก์ชันที่เพิ่ม] ---
+// ===== GET: อ่านข้อมูลไปแสดงหน้าเว็บ =====
+function doGet(e) {
+  try {
+    const book = SpreadsheetApp.openById(SHEET_ID);
+    const attendanceSheet = book.getSheetByName(ATTENDANCE_SHEET_NAME);
+    const employeeSheet = book.getSheetByName(EMPLOYEE_SHEET_NAME);
+    const hrSheet = book.getSheetByName(HR_SHEET_NAME); // ✨ [เพิ่ม]
+
+    const attendanceData = getSheetDataAsObjects(attendanceSheet);
+    const employeeData = getSheetDataAsObjects(employeeSheet);
+    const hrData = getSheetDataAsObjects(hrSheet); // ✨ [เพิ่ม] อ่านข้อมูล HR
+
+    return createJsonResponse({
+      status: 'success',
+      attendance: attendanceData,
+      employees: employeeData,
+      hr_users: hrData // ✨ [เพิ่ม] ส่งข้อมูล HR กลับไป
+    });
+  } catch (err) {
+    return createJsonResponse({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * อัปโหลดรูปภาพไปยัง Google Drive แล้วคืนลิงก์
+ * @param {string} base64Data dataURL (data:image/jpeg;base64,xxxx)
+ * @param {string} fileName   EMP001_20251107_0901.jpg
+ */
+function uploadPhotoToDrive(base64Data, fileName) {
+  try {
+    const base64String = base64Data.split(',')[1];
+    const blob = Utilities.newBlob(Utilities.base64Decode(base64String), 'image/jpeg', fileName);
+    const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+    const file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return file.getUrl();
+  } catch (error) {
+    Logger.log('Upload error: ' + error.message);
+    throw new Error('ไม่สามารถอัปโหลดรูปภาพได้: ' + error.message);
+  }
+}
+
+// ===== POST: บันทึก Check-In/Out =====
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    const book = SpreadsheetApp.openById(SHEET_ID);
+    const sheet = book.getSheetByName(ATTENDANCE_SHEET_NAME);
+
+    // --- ✨ [แก้ไข] 1. เพิ่ม Headers ใหม่สำหรับ Check-Out ---
+    const REQUIRED = [
+      'empId','name','department','position','date','checkIn','checkOut',
+      'workHours','otHours','totalHours','totalHours_HHMM','status',
+      // Check-In (เดิม)
+      'type','reason','lat','lon','distance','photoUrl',
+      // Check-Out (ใหม่)
+      'checkOut_type', 'checkOut_reason', 'checkOut_lat', 
+      'checkOut_lon', 'checkOut_distance', 'checkOut_photoUrl'
+    ];
+    let headers = ensureHeaders(sheet, REQUIRED);
+
+    // ----- Check-In (เหมือนเดิม) -----
+    if (data.action === 'checkIn') {
+      let photoUrl = '';
+      if (data.photoData) {
+        const fileName = `${data.empId}_${(data.date || '').replace(/-/g,'')}_${(data.checkIn || '').replace(/:/g,'')}_CI.jpg`;
+        photoUrl = uploadPhotoToDrive(data.photoData, fileName);
+      }
+
+      const newRow = headers.map(header => {
+        if (header === 'checkIn' && data.checkIn) return `'${data.checkIn}`;
+        if (header === 'photoUrl') return photoUrl;
+        if (header === 'type') {
+          const onsite = (data.onsite !== false);
+          return onsite ? 'ในออฟฟิศ' : 'นอกสถานที่';
+        }
+        if (header === 'reason') return data.offsiteNote || '';
+        if (header === 'lat') return (data.locationLat ?? '');
+        if (header === 'lon') return (data.locationLon ?? '');
+        if (header === 'distance') return (data.locationDistanceM ?? '');
+
+        // ใส่ null ในช่อง checkOut (ป้องกันข้อมูลขยะ)
+        if (header.startsWith('checkOut_')) return null;
+
+        return (data.hasOwnProperty(header) ? data[header] : null);
+      });
+      if (headers.indexOf('checkOut') > -1)   newRow[headers.indexOf('checkOut')] = null;
+      if (headers.indexOf('workHours') > -1)  newRow[headers.indexOf('workHours')] = 0;
+      if (headers.indexOf('otHours') > -1)    newRow[headers.indexOf('otHours')] = 0;
+      if (headers.indexOf('totalHours') > -1) newRow[headers.indexOf('totalHours')] = 0;
+
+      sheet.appendRow(newRow);
+
+      return createJsonResponse({
+        status: 'success',
+        message: 'Check-in successful',
+        data: { ...data, photoUrl }
+      });
+    }
+
+    // --- ✨ [แก้ไข] 2. อัปเกรด Check-Out ---
+    if (data.action === 'checkOut') {
+      
+      // 2.1 อัปโหลดรูป Check-Out (ถ้ามี)
+      let checkOutPhotoUrl = '';
+      if (data.checkOut_photoData) {
+        const fileName = `${data.empId}_${(data.date || '').replace(/-/g,'')}_${(data.checkOut || '').replace(/:/g,'')}_CO.jpg`; // เติม _CO (Check-Out)
+        checkOutPhotoUrl = uploadPhotoToDrive(data.checkOut_photoData, fileName);
+      }
+
+      // 2.2 ค้นหาแถวที่จะอัปเดต (เหมือนเดิม)
+      const all = sheet.getDataRange().getValues();
+      headers = all.shift(); 
+
+      const empIdCol = headers.indexOf('empId');
+      const dateCol  = headers.indexOf('date');
+      let rowToUpdate = -1;
+      
+      for (let i = 0; i < all.length; i++) {
+        const r = all[i];
+        const rowDate = (r[dateCol] instanceof Date)
+          ? Utilities.formatDate(r[dateCol], 'GMT+7', 'yyyy-MM-dd')
+          : r[dateCol];
+        if (String(r[empIdCol]) === String(data.empId) && rowDate === data.date) {
+          rowToUpdate = i + 2; // +1 for 1-based index, +1 for header row
+          break;
+        }
+      }
+
+      if (rowToUpdate === -1) throw new Error('ไม่พบแถวสำหรับอัปเดต Check-Out');
+
+      // 2.3 ค้นหาตำแหน่งคอลัมน์ (ทั้งเก่าและใหม่)
+      const coCol    = headers.indexOf('checkOut');
+      const whCol    = headers.indexOf('workHours'); 
+      const otCol    = headers.indexOf('otHours');
+      const totCol   = headers.indexOf('totalHours'); 
+      const totHHMMCol = headers.indexOf('totalHours_HHMM');
+      // (คอลัมน์ใหม่)
+      const coTypeCol     = headers.indexOf('checkOut_type');
+      const coReasonCol   = headers.indexOf('checkOut_reason');
+      const coLatCol      = headers.indexOf('checkOut_lat');
+      const coLonCol      = headers.indexOf('checkOut_lon');
+      const coDistCol     = headers.indexOf('checkOut_distance');
+      const coPhotoCol    = headers.indexOf('checkOut_photoUrl');
+
+      // 2.4 บันทึกข้อมูล (Set Values)
+      
+      // (ข้อมูลเก่า: เวลา)
+      if (coCol > -1)  sheet.getRange(rowToUpdate, coCol + 1).setValue(`'${data.checkOut}`); 
+      if (whCol > -1)  sheet.getRange(rowToUpdate, whCol + 1).setValue(data.workHours || 0); 
+      if (otCol > -1)  sheet.getRange(rowToUpdate, otCol + 1).setValue(data.otHours || 0); 
+      if (totCol > -1) sheet.getRange(rowToUpdate, totCol + 1).setValue(data.totalHours || 0); 
+      if (totHHMMCol > -1) sheet.getRange(rowToUpdate, totHHMMCol + 1).setValue(data.totalHours_HHMM || ''); // 👈 ✨ [เพิ่มบรรทัดนี้]
+
+      // (ข้อมูลใหม่: พิกัด, รูป)
+      if (coTypeCol > -1) {
+        const onsite = (data.checkOut_onsite !== false);
+        sheet.getRange(rowToUpdate, coTypeCol + 1).setValue(onsite ? 'ในออฟฟิศ' : 'นอกสถานที่');
+      }
+      if (coReasonCol > -1) sheet.getRange(rowToUpdate, coReasonCol + 1).setValue(data.checkOut_offsiteNote || '');
+if (coLatCol > -1)    sheet.getRange(rowToUpdate, coLatCol + 1).setValue(data.checkOut_lat ?? '');
+if (coLonCol > -1)    sheet.getRange(rowToUpdate, coLonCol + 1).setValue(data.checkOut_lon ?? '');
+if (coDistCol > -1)   sheet.getRange(rowToUpdate, coDistCol + 1).setValue(data.checkOut_distance ?? '');
+if (coPhotoCol > -1)  sheet.getRange(rowToUpdate, coPhotoCol + 1).setValue(checkOutPhotoUrl);
+
+      return createJsonResponse({
+        status: 'success',
+        message: 'Check-out successful',
+        data: {...data, checkOut_photoUrl: checkOutPhotoUrl} // ส่ง URL กลับไปให้ frontend
+      });
+    }
+
+    if (data.action === 'edit') {
+      
+      // 3.1 ค้นหาแถวที่จะอัปเดต (เหมือน checkOut)
+      const all = sheet.getDataRange().getValues();
+      headers = all.shift(); // ใช้ headers ล่าสุดจากชีต
+
+      const empIdCol = headers.indexOf('empId');
+      const dateCol  = headers.indexOf('date');
+      let rowToUpdate = -1;
+
+      for (let i = 0; i < all.length; i++) {
+        const r = all[i];
+        const rowDate = (r[dateCol] instanceof Date)
+          ? Utilities.formatDate(r[dateCol], 'GMT+7', 'yyyy-MM-dd')
+          : r[dateCol];
+        
+        // [แก้ไข] ใช้ normalizeDateStr เพื่อความแม่นยำ
+        const normalizedRowDate = normalizeDateStr(rowDate);
+        const normalizedDataDate = normalizeDateStr(data.date);
+
+        if (String(r[empIdCol]) === String(data.empId) && normalizedRowDate === normalizedDataDate) {
+          rowToUpdate = i + 2; // +1 for 1-based index, +1 for header row
+          break;
+        }
+      }
+
+      if (rowToUpdate === -1) {
+        throw new Error('ไม่พบแถวสำหรับอัปเดต (Edit) (empId: ' + data.empId + ', date: ' + data.date + ')');
+      }
+
+      // 3.2 ค้นหาตำแหน่งคอลัมน์ (ทั้งหมดที่จะแก้)
+      const ciCol      = headers.indexOf('checkIn');
+      const coCol      = headers.indexOf('checkOut');
+      const statusCol  = headers.indexOf('status');
+      const whCol      = headers.indexOf('workHours'); 
+      const otCol      = headers.indexOf('otHours');
+      const totCol     = headers.indexOf('totalHours');
+      const totHHMMCol = headers.indexOf('totalHours_HHMM');
+      
+      // 3.3 บันทึกข้อมูล (Set Values)
+      // (เราจะอัปเดตเฉพาะฟิลด์ที่ส่งมา)
+
+      if (ciCol > -1) sheet.getRange(rowToUpdate, ciCol + 1).setValue(data.checkIn ? `'${data.checkIn}` : null);
+      if (coCol > -1) sheet.getRange(rowToUpdate, coCol + 1).setValue(data.checkOut ? `'${data.checkOut}` : null);
+      if (statusCol > -1) sheet.getRange(rowToUpdate, statusCol + 1).setValue(data.status || null);
+      
+      if (whCol > -1)  sheet.getRange(rowToUpdate, whCol + 1).setValue(data.workHours || 0);
+      if (otCol > -1)  sheet.getRange(rowToUpdate, otCol + 1).setValue(data.otHours || 0);
+      if (totCol > -1) sheet.getRange(rowToUpdate, totCol + 1).setValue(data.totalHours || 0); 
+      if (totHHMMCol > -1) sheet.getRange(rowToUpdate, totHHMMCol + 1).setValue(data.totalHours_HHMM || '');
+
+      return createJsonResponse({
+        status: 'success',
+        message: 'อัปเดตข้อมูลสำเร็จ',
+        data: data // ส่งข้อมูลที่อัปเดตแล้วกลับไปให้ frontend
+      });
+    }
+    // --- ✨ [จบส่วนที่เพิ่ม] ---
+
+    // --- ✨ [เพิ่มใหม่] 3. จัดการการลบข้อมูล (Delete) ---
+    if (data.action === 'delete') {
+      
+      // 3.1 ค้นหาแถวที่จะลบ
+      const all = sheet.getDataRange().getValues();
+      const localHeaders = all.shift(); // ใช้ headers ท้องถิ่น
+      
+      const empIdCol = localHeaders.indexOf('empId');
+      const dateCol  = localHeaders.indexOf('date');
+      let rowToDelete = -1; // นี่คือ index ใน array (0-based)
+
+      for (let i = 0; i < all.length; i++) {
+        const r = all[i];
+        const rowDate = (r[dateCol] instanceof Date)
+          ? Utilities.formatDate(r[dateCol], 'GMT+7', 'yyyy-MM-dd')
+          : r[dateCol]; // [แก้ไข] ใช้ r[dateCol] โดยตรงหากไม่ใช่ Date
+        
+        // [แก้ไข] ตรวจสอบ normalizeDateStr ด้วย
+        const normalizedRowDate = normalizeDateStr(rowDate);
+        const normalizedDataDate = normalizeDateStr(data.date);
+
+        if (String(r[empIdCol]) === String(data.empId) && normalizedRowDate === normalizedDataDate) {
+          rowToDelete = i;
+          break;
+        }
+      }
+
+      if (rowToDelete === -1) {
+        throw new Error('ไม่พบแถวข้อมูลที่จะลบ (empId: ' + data.empId + ', date: ' + data.date + ')');
+      }
+
+      // 3.2 ลบแถว
+      // (แถวในชีตจริง = index + 2 เพราะ array 0-based และมีแถว header)
+      sheet.deleteRow(rowToDelete + 2); 
+
+      return createJsonResponse({
+        status: 'success',
+        message: 'ลบข้อมูลสำเร็จ'
+      });
+    }
+    // --- ✨ [จบส่วนที่เพิ่ม] ---
+  // --- ✨ [เพิ่มใหม่] 4. ระบบ Login ตรวจสอบจาก Sheet ---
+    if (data.action === 'login') {
+      const sheet = book.getSheetByName(HR_SHEET_NAME); // อ่านชีต HR
+      const allUsers = getSheetDataAsObjects(sheet);    // แปลงเป็น Object (ต้องมี header: username, password, role, name)
+      
+      // ค้นหา user ที่ตรงกัน
+      const foundUser = allUsers.find(u => 
+        String(u.username) === String(data.username) && 
+        String(u.password) === String(data.password)
+      );
+
+      if (foundUser) {
+        return createJsonResponse({
+          status: 'success',
+          message: 'Login successful',
+          data: {
+            role: foundUser.role,  // ส่ง role กลับไป (manager หรือ hr)
+            name: foundUser.name   // ส่งชื่อกลับไปแสดงผล
+          }
+        });
+      } else {
+        return createJsonResponse({
+          status: 'error',
+          message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'
+        });
+      }
+    }
+    // --- ✨ [จบส่วนที่เพิ่ม] ---
+    // --- ✨ [เพิ่มใหม่] 5. เปลี่ยนรหัสผ่าน (Change Credentials) ---
+    if (data.action === 'changeCredentials') {
+      const sheet = book.getSheetByName(HR_SHEET_NAME);
+      const allUsers = sheet.getDataRange().getValues(); // อ่านข้อมูลดิบ (รวม Header)
+      
+      // หา Index ของคอลัมน์
+      const headers = allUsers[0];
+      const userColIndex = headers.indexOf('username');
+      const passColIndex = headers.indexOf('password');
+      const nameColIndex = headers.indexOf('name');
+      
+      let userRowIndex = -1;
+
+      // วนลูปหาแถวของผู้ใช้ที่กำลังล็อกอินอยู่
+      for (let i = 1; i < allUsers.length; i++) {
+        // ตรวจสอบว่า Username เดิมตรงกัน และ Password เดิมถูกต้อง (เพื่อความปลอดภัย)
+        if (String(allUsers[i][userColIndex]) === String(data.currentUsername) && 
+            String(allUsers[i][passColIndex]) === String(data.oldPassword)) {
+          userRowIndex = i + 1; // +1 เพราะ index เริ่ม 0 แต่แถวใน sheet เริ่ม 1
+          break;
+        }
+      }
+
+      if (userRowIndex > -1) {
+        // เจอตัวผู้ใช้และรหัสเดิมถูกต้อง -> ทำการอัปเดต
+        
+        // อัปเดต Username ใหม่
+        sheet.getRange(userRowIndex, userColIndex + 1).setValue(data.newUsername);
+        
+        // อัปเดต Password ใหม่
+        sheet.getRange(userRowIndex, passColIndex + 1).setValue(data.newPassword);
+        // ✨ [เพิ่ม] อัปเดต Name (ถ้ามีการส่งค่ามา)
+        if (nameColIndex > -1 && data.newName) {
+           sheet.getRange(userRowIndex, nameColIndex + 1).setValue(data.newName);
+        }
+
+        return createJsonResponse({
+          status: 'success',
+          message: 'เปลี่ยนข้อมูลสำเร็จ! กรุณาเข้าสู่ระบบใหม่อีกครั้ง'
+        });
+      } else {
+        return createJsonResponse({
+          status: 'error',
+          message: 'รหัสผ่านเดิมไม่ถูกต้อง หรือไม่พบผู้ใช้งาน'
+        });
+      }
+    }
+    // --- ✨ [จบส่วนที่เพิ่ม] ---
+    throw new Error('Invalid action.');
+  } catch (error) {
+    return createJsonResponse({ status: 'error', message: error.message });
+  }
+
+  
+}
+
+// ===== LINE NOTIFICATION FUNCTIONS =====
+// (ฟังก์ชันสำหรับแจ้งเตือนตอนเย็น)
+
+/**
+ * ฟังก์ชันหลักที่จะถูกเรียกโดย Trigger
+ * (คุณต้องไปตั้ง Trigger ให้รันฟังก์ชันนี้)
+ */
+function sendCheckOutReminder() {
+  try {
+    // 1. ข้อความที่ต้องการส่ง
+    const message = 'แจ้งพนักงานทุกคน! ⏰\nใกล้เวลา 18:00 น. แล้ว อย่าลืม Check-Out ในระบบ WC_Check-In กันด้วยนะครับ';
+    
+    // 2. เรียกฟังก์ชันส่ง LINE
+    sendLineMessage(message);
+    
+  } catch (e) {
+    Logger.log('Error in sendCheckOutReminder: ' + e.message);
+  }
+}
+
+/**
+ * [อัปเดต] ฟังก์ชันสำหรับส่งข้อความ Push Message ไปยัง LINE
+ * เปลี่ยนจาก Push (1 คน) เป็น Multicast (หลายคน)
+ * @param {string} message ข้อความที่ต้องการส่ง
+ */
+function sendLineMessage(message) {
+  
+  // 1. ดึงค่าจาก Script Properties
+  const properties = PropertiesService.getScriptProperties();
+  const CHANNEL_TOKEN = properties.getProperty('LINE_CHANNEL_TOKEN');
+  const idString = properties.getProperty('LINE_TO_ID'); // 👈 ดึงค่าที่คั่นด้วย ","
+
+  // 2. ตรวจสอบว่าตั้งค่าครบหรือไม่
+  if (!CHANNEL_TOKEN || !idString) {
+    Logger.log('❌ Error: LINE_CHANNEL_TOKEN or LINE_TO_ID is not set in Script Properties.');
+    return;
+  }
+
+  // 3. [ใหม่] แปลง String (เช่น "U1,U2") ให้เป็น Array (เช่น ["U1", "U2"])
+  const idArray = idString.split(',').map(id => id.trim()).filter(id => id.length > 0);
+  
+  if (idArray.length === 0) {
+    Logger.log('❌ Error: LINE_TO_ID property is set but contains no valid IDs.');
+    return;
+  }
+
+  // 4. [ใหม่] กำหนด URL เป็น "multicast"
+  const LINE_API_URL = 'https://api.line.me/v2/bot/message/multicast';
+
+  // 5. [ใหม่] สร้าง Payload โดยใช้ idArray
+  const payload = {
+    to: idArray, // 👈 ใช้ Array ที่เราแปลงแล้ว
+    messages: [
+      {
+        type: 'text',
+        text: message
+      }
+    ]
+  };
+
+  // 6. กำหนด Options (เหมือนเดิม)
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      Authorization: 'Bearer ' + CHANNEL_TOKEN
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  // 7. ส่ง Request (เหมือนเดิม)
+  try {
+    const response = UrlFetchApp.fetch(LINE_API_URL, options);
+    const responseCode = response.getResponseCode();
+    const responseBody = response.getContentText();
+
+    if (responseCode === 200) {
+      Logger.log('✅ LINE multicast message sent successfully to ' + idArray.length + ' users.');
+    } else {
+      // ถ้า Error 400 อาจแปลว่ามี User ID บางส่วนที่ใช้งานไม่ได้
+      Logger.log(`❌ Failed to send LINE multicast. Code: ${responseCode}. Body: ${responseBody}`);
+    }
+  } catch (e) {
+    Logger.log('❌ Exception during UrlFetchApp: ' + e.message);
+  }
+}
+
+// ==========================================
+// ⏰ ฟังก์ชันสำหรับ Auto Check-Out ตอนเที่ยงคืน
+// ==========================================
+
+function runAutoCheckOutJob() {
+  const book = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = book.getSheetByName(ATTENDANCE_SHEET_NAME);
+  
+  // 1. หาวันที่ "เมื่อวาน" (เพราะเราจะรัน job นี้หลังเที่ยงคืนของวันนั้น)
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1); // ย้อนไป 1 วัน
+  const yesterdayStr = Utilities.formatDate(yesterday, 'GMT+7', 'yyyy-MM-dd');
+  
+  console.log("Running Auto Check-Out for date: " + yesterdayStr);
+
+  const data = sheet.getDataRange().getValues();
+  const headers = data.shift(); // เอาหัวตารางออก
+
+  // หา index ของคอลัมน์ที่ต้องใช้
+  const colIndexes = {
+    empId: headers.indexOf('empId'),
+    date: headers.indexOf('date'),
+    checkIn: headers.indexOf('checkIn'),
+    checkOut: headers.indexOf('checkOut'),
+    status: headers.indexOf('status'),
+    workHours: headers.indexOf('workHours'),
+    otHours: headers.indexOf('otHours'),
+    totalHours: headers.indexOf('totalHours'),
+    totalHours_HHMM: headers.indexOf('totalHours_HHMM'),
+    checkOut_type: headers.indexOf('checkOut_type'),
+    checkOut_reason: headers.indexOf('checkOut_reason')
+  };
+
+  // วนลูปตรวจสอบทุกแถว
+  data.forEach((row, index) => {
+    const rowIndex = index + 2; // แถวใน Sheet จริง (data เริ่ม 0, header 1)
+    
+    // แปลงวันที่ในแถวให้เป็น String เพื่อเปรียบเทียบ
+    let rowDateStr = '';
+    if (row[colIndexes.date] instanceof Date) {
+      rowDateStr = Utilities.formatDate(row[colIndexes.date], 'GMT+7', 'yyyy-MM-dd');
+    } else {
+      rowDateStr = String(row[colIndexes.date]);
+    }
+
+    const checkInTime = row[colIndexes.checkIn];
+    const checkOutTime = row[colIndexes.checkOut];
+
+    // 🎯 เงื่อนไข: วันที่คือเมื่อวาน + มี CheckIn + ยังไม่มี CheckOut
+    if (rowDateStr === yesterdayStr && checkInTime && !checkOutTime) {
+      
+      // 2. คำนวณเวลา Check-Out ใหม่ (CheckIn + 9 ชั่วโมง)
+      const newCheckOutTime = addNineHours(checkInTime);
+      
+      // 3. คำนวณชั่วโมงทำงาน
+      const stats = calculateStatsServer(checkInTime, newCheckOutTime);
+
+      // 4. อัปเดตข้อมูลลง Sheet
+      sheet.getRange(rowIndex, colIndexes.checkOut + 1).setValue("'" + newCheckOutTime); // ใส่ ' นำหน้าเพื่อบังคับเป็น Text
+      sheet.getRange(rowIndex, colIndexes.status + 1).setValue('ลืม Check-Out');
+      
+      // อัปเดตตัวเลขสถิติ
+      if (colIndexes.workHours > -1) sheet.getRange(rowIndex, colIndexes.workHours + 1).setValue(stats.workHours);
+      if (colIndexes.otHours > -1) sheet.getRange(rowIndex, colIndexes.otHours + 1).setValue(stats.otHours);
+      if (colIndexes.totalHours > -1) sheet.getRange(rowIndex, colIndexes.totalHours + 1).setValue(stats.totalHours);
+      if (colIndexes.totalHours_HHMM > -1) sheet.getRange(rowIndex, colIndexes.totalHours_HHMM + 1).setValue(stats.totalHours_HHMM);
+
+      // ระบุเหตุผลเพิ่ม (Optional)
+      if (colIndexes.checkOut_type > -1) sheet.getRange(rowIndex, colIndexes.checkOut_type + 1).setValue('ระบบอัตโนมัติ');
+      if (colIndexes.checkOut_reason > -1) sheet.getRange(rowIndex, colIndexes.checkOut_reason + 1).setValue('Auto Check-out (+9 hrs)');
+
+      console.log(`Auto Check-Out User: ${row[colIndexes.empId]} | Time: ${newCheckOutTime}`);
+    }
+  });
+}
+
+// --- Helper: บวกเวลา 9 ชั่วโมง ---
+function addNineHours(timeStr) {
+  // timeStr format "HH:mm" e.g., "09:10"
+  if (!timeStr || typeof timeStr !== 'string') return "18:00"; // fallback
+  
+  const parts = timeStr.split(':');
+  let hours = parseInt(parts[0], 10);
+  let mins = parseInt(parts[1], 10);
+  
+  hours += 9; // บวก 9 ชั่วโมง
+  
+  // ถ้าเกิน 24 ชม. ให้วนกลับ (แต่ปกติระบบงานไม่น่าเกินข้ามวันแบบนั้นสำหรับเคสนี้)
+  if (hours >= 24) hours -= 24;
+  
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
+// --- Helper: คำนวณชั่วโมงทำงาน (เลียนแบบ Logic ฝั่ง Client) ---
+function calculateStatsServer(checkIn, checkOut) {
+  const [inH, inM] = checkIn.split(':').map(Number);
+  const [outH, outM] = checkOut.split(':').map(Number);
+
+  let totalMins = (outH * 60 + outM) - (inH * 60 + inM);
+  if (totalMins < 0) totalMins += 24 * 60; // กรณีข้ามวัน
+
+  const totalDecimal = totalMins / 60;
+  
+  // Logic: Work=Max 8, OT=ส่วนเกิน
+  const workHours = Math.min(totalDecimal, 8.0);
+  const otHours = Math.max(0, totalDecimal - 8.0);
+  
+  // แปลงเป็น HH.MM
+  const displayMins = Math.round(totalDecimal * 60);
+  const h = Math.floor(displayMins / 60);
+  const m = displayMins % 60;
+  const hhmm = `${h}.${String(m).padStart(2, '0')}`;
+
+  return {
+    workHours: parseFloat(workHours.toFixed(2)),
+    otHours: parseFloat(otHours.toFixed(2)),
+    totalHours: parseFloat(totalDecimal.toFixed(2)),
+    totalHours_HHMM: hhmm
+  };
+}

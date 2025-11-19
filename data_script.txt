@@ -1,0 +1,177 @@
+/***** CONFIG *****/
+// 1) สเปรดชีตที่ใช้บันทึกเวลาเข้า-ออก (ของเดิมในโปรเจ็กต์คุณ)
+const ATTENDANCE_SHEET_ID = '1vua0b46ZMEf4uDEAzf8Wb8AaDKrYUnRyLR700_UoC_I';
+const ATTENDANCE_SHEET_NAME = 'Check-In';
+
+// 2) ฐานข้อมูลกลางพนักงาน (WC_DB) —> ใช้สำหรับกรอกอัตโนมัติ
+const EMPLOYEE_DB_ID = '1VxFjJWl91RCZxkIvcUtA-J15pZro34sDhrb7DmLurOk';
+const EMPLOYEE_DB_SHEET_NAME = 'WC_DB';
+
+/***** HELPERS *****/
+function json(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getSheetBy(id, name) {
+  const ss = SpreadsheetApp.openById(id);
+  const sh = ss.getSheetByName(name);
+  if (!sh) throw new Error(`Sheet "${name}" not found.`);
+  return sh;
+}
+
+function asObjects_(values) {
+  if (!values || values.length === 0) return [];
+  const headers = values[0].map(h => String(h).trim());
+  const out = [];
+  for (let r = 1; r < values.length; r++) {
+    const obj = {};
+    for (let c = 0; c < headers.length; c++) {
+      const v = values[r][c];
+      obj[headers[c]] = v instanceof Date
+        ? Utilities.formatDate(v, "GMT+7", "yyyy-MM-dd")
+        : v;
+    }
+    out.push(obj);
+  }
+  return out;
+}
+
+/***** LOOKUP EMPLOYEE FROM CENTRAL DB (WC_DB) *****/
+function lookupEmployee_(empId) {
+  const sh = getSheetBy(EMPLOYEE_DB_ID, EMPLOYEE_DB_SHEET_NAME);
+  const data = sh.getDataRange().getValues();
+  if (data.length < 2) return null;
+
+  // map header -> index
+  const headers = data[0].map(h => String(h).trim());
+  const idx = {};
+  headers.forEach((h, i) => idx[h] = i);
+
+  // ปรับชื่อให้ตรงกับชีตจากรูปของคุณ
+  const COL = {
+    id:  idx['Employee_ID'],
+    pre: idx['Prefix'],
+    fn:  idx['FirstName'],
+    ln:  idx['LastName'],
+    cn:  idx['CalledName'],
+    dp:  idx['Department'],
+    ps:  idx['Position'],
+    em:  idx['PrimaryEmail'],
+    ph1: idx['PrimaryPhone'],
+    ph2: idx['SecondaryPhone'],
+  };
+
+  // หาแถวที่รหัสตรง (ไม่สนตัวใหญ่เล็ก)
+  let rowFound = null;
+  for (let r = 1; r < data.length; r++) {
+    const row = data[r];
+    if (String(row[COL.id]).trim().toLowerCase() === String(empId).trim().toLowerCase()) {
+      rowFound = row;
+      break;
+    }
+  }
+  if (!rowFound) return null;
+
+  return {
+    status: 'success',
+    empId: rowFound[COL.id] || '',
+    prefix: rowFound[COL.pre] || '',
+    firstName: rowFound[COL.fn] || '',
+    lastName: rowFound[COL.ln] || '',
+    calledName: rowFound[COL.cn] || '',
+    department: rowFound[COL.dp] || '',
+    position: rowFound[COL.ps] || '',
+    email: rowFound[COL.em] || '',
+    phone: rowFound[COL.ph1] || '',
+    secondaryPhone: rowFound[COL.ph2] || '',
+  };
+}
+
+/***** DASHBOARD HELPERS (เดิม) *****/
+function getSheetDataAsObjects_(sheet) {
+  if (!sheet) return [];
+  return asObjects_(sheet.getDataRange().getValues());
+}
+
+/***** ENDPOINTS *****/
+// GET: 
+//  - ?empId=WC001   -> ค้นหาจากฐานกลาง WC_DB เพื่อกรอกอัตโนมัติ
+//  - (ไม่มี empId)  -> โหลดข้อมูลแดชบอร์ดเดิม (attendance)
+function doGet(e) {
+  try {
+    const empId = e && e.parameter && e.parameter.empId;
+    if (empId) {
+      const emp = lookupEmployee_(empId);
+      if (!emp) return json({ status: 'not_found', message: `No employee for id: ${empId}` });
+      return json(emp);
+    }
+
+    // โหมดเดิม: ดึงข้อมูลสำหรับหน้าแดชบอร์ด
+    const attSS = SpreadsheetApp.openById(ATTENDANCE_SHEET_ID);
+    const attendanceSheet = attSS.getSheetByName(ATTENDANCE_SHEET_NAME);
+    const attendanceData = getSheetDataAsObjects_(attendanceSheet);
+
+    return json({
+      status: "success",
+      attendance: attendanceData
+      // ไม่ต้องส่งรายการ employees แล้ว เพราะเราไปอ่านจากฐานกลางผ่าน ?empId
+    });
+
+  } catch (err) {
+    return json({ status: 'error', message: err.message });
+  }
+}
+
+// POST: ใช้บันทึก Check-In/Out เหมือนโค้ดเดิมของคุณ
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+
+    const sheet = getSheetBy(ATTENDANCE_SHEET_ID, ATTENDANCE_SHEET_NAME);
+
+    if (data.action === 'checkIn') {
+      // อ่าน header แล้วประกอบแถวตามชื่อคอลัมน์ (ยืดหยุ่นเรื่องลำดับ)
+      const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+      const newRow = headers.map(h => (data[h] !== undefined ? data[h] : null));
+      // ค่าเริ่มต้น
+      if (headers.indexOf('checkOut') >= 0)   newRow[headers.indexOf('checkOut')] = null;
+      if (headers.indexOf('workHours') >= 0)  newRow[headers.indexOf('workHours')] = 0;
+      if (headers.indexOf('otHours') >= 0)    newRow[headers.indexOf('otHours')] = 0;
+      if (headers.indexOf('totalHours') >= 0) newRow[headers.indexOf('totalHours')] = 0;
+
+      sheet.appendRow(newRow);
+      return json({ status: "success", message: "Check-in successful", data });
+
+    } else if (data.action === 'checkOut') {
+      const all = sheet.getDataRange().getValues();
+      const headers = all.shift();
+      const empIdCol = headers.indexOf('empId');
+      const dateCol  = headers.indexOf('date');
+
+      let rowToUpdate = -1;
+      for (let i = 0; i < all.length; i++) {
+        const row = all[i];
+        const rowDate = (row[dateCol] instanceof Date)
+            ? Utilities.formatDate(row[dateCol], "GMT+7", "yyyy-MM-dd")
+            : row[dateCol];
+        if (row[empIdCol] == data.empId && rowDate == data.date) {
+          rowToUpdate = i + 2; // +2 (header + index base 1)
+          break;
+        }
+      }
+      if (rowToUpdate === -1) throw new Error('Could not find check-in record to update.');
+
+      if (headers.indexOf('checkOut') >= 0)   sheet.getRange(rowToUpdate, headers.indexOf('checkOut') + 1).setValue(data.checkOut);
+      if (headers.indexOf('workHours') >= 0)  sheet.getRange(rowToUpdate, headers.indexOf('workHours') + 1).setValue(data.workHours);
+      if (headers.indexOf('otHours') >= 0)    sheet.getRange(rowToUpdate, headers.indexOf('otHours') + 1).setValue(data.otHours);
+      if (headers.indexOf('totalHours') >= 0) sheet.getRange(rowToUpdate, headers.indexOf('totalHours') + 1).setValue(data.totalHours);
+
+      return json({ status: "success", message: "Check-out successful", data });
+    }
+
+    throw new Error('Invalid action.');
+  } catch (err) {
+    return json({ status: 'error', message: err.message });
+  }
+}

@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="th">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WC_Check-In - ระบบลงเวลาเข้าออกงาน</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  
+  <script src="https://cdn.tailwindcss.com" type="text/javascript"></script>
+  
+ <link href="https://cdn.jsdelivr.net/npm/slim-select@latest/dist/slimselect.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/slim-select@latest/dist/slimselect.min.js"></script>
+  
+  <link rel="stylesheet" href="style.css">
+</head>
+ <body>
+  <main>
+   <div class="container"><div class="header-container"> 
+     <div class="system-title">
+      <h1 id="systemTitle">WC_Check-In</h1>
+     </div>
+     <div class="auth-buttons"><button id="managerBtn" class="auth-btn manager-btn"> <span>Manager Login</span> </button> <button id="hrBtn" class="auth-btn hr-btn"> <span>HR Login</span> </button> <button id="logoutBtn" class="auth-btn logout-btn" style="display: none;"> <span>ออกจากระบบ</span></button> <button id="settingsBtn" class="auth-btn settings-icon-btn" style="display: none;" title="ตั้งค่าบัญชี">
+   ⚙️
+</button> 
+     </div>
+    </div><div id="currentRoleDisplay" class="current-role-display" style="display: none;">
+     <div class="role-info">
+      <div class="role-badge" id="currentRoleBadge">
+       พนักงาน
+      </div>
+      <div class="welcome-text" id="welcomeText">
+       ยินดีต้อนรับเข้าสู่ WC_Check-In
+      </div>
+     </div>
+    </div><div id="clockDisplay" class="section-card" style="text-align: center; margin-bottom: 20px;">
+     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
+      <div style="flex: 1; min-width: 200px;">
+       <div style="font-size: 2.5rem; font-weight: bold; color: #003366; margin-bottom: 5px;" id="currentTime">
+        --:--:--
+       </div>
+       <div style="font-size: 1.1rem; color: #666;" id="currentDate">
+        กำลังโหลด...
+       </div>
+      </div>
+      <div style="flex: 1; min-width: 200px;">
+       <div id="workStatus" style="padding: 15px 25px; border-radius: 12px; font-weight: 600; font-size: 1rem;"><span id="workStatusText">กำลังตรวจสอบ...</span>
+       </div>
+      </div>
+     </div>
+    </div>
+
+    
+    <div id="mainContent">
+     <div class="section-card">
+      <h2>ลงเวลาเข้า-ออกงาน</h2>
+      <form id="attendanceForm">
+       <div class="form-row">
+        <div class="form-group"><label for="employeeId">รหัสพนักงาน:</label> <input type="text" id="employeeId" name="employeeId" required placeholder="กรอกรหัสพนักงาน (เช่น EMP001)">
+        </div>
+        <div class="form-group"><label for="currentDateTime">วันที่และเวลาปัจจุบัน:</label> <input type="text" id="currentDateTime" name="currentDateTime" readonly style="background: #f8f9fa; color: #666;">
+        </div>
+       </div>
+       <div class="form-row">
+        <div class="form-group"><label for="firstName">ชื่อ:</label> <input type="text" id="firstName" name="firstName"  readonly required placeholder="กรอกชื่อจริง">
+        </div>
+        <div class="form-group"><label for="lastName">นามสกุล:</label> <input type="text" id="lastName" name="lastName" readonly required placeholder="กรอกนามสกุล">
+        </div>
+       </div>
+       <div class="form-row">
+        <div class="form-group"><label for="department">แผนก:</label> <input type="text" id="department" name="department" readonly required placeholder="กรอกแผนก (เช่น IT, HR)">
+        </div>
+        <div class="form-group"><label for="position">ตำแหน่ง:</label> <input type="text" id="position" name="position" readonly required placeholder="กรอกตำแหน่ง">
+        </div>
+       </div>
+       <div class="form-row">
+        <div class="form-group"><label for="email">อีเมล:</label> <input type="email" id="email" name="email" readonly required placeholder="กรอกอีเมล">
+        </div>
+        <div class="form-group"><label for="phone">เบอร์โทร:</label> <input type="tel" id="phone" name="phone" readonly required placeholder="กรอกเบอร์โทร">
+        </div>
+       </div>
+            <div class="verification-section" id="verificationSection">
+  <h3>ยืนยันตัวตนก่อนลงเวลา</h3>
+
+            <div class="location-status">
+               <div class="status-indicator" id="locationIndicator">
+                  <span class="status-icon" id="locationIcon">📍</span>
+                  <span class="status-text" id="locationText">ยังไม่ได้ตรวจสอบตำแหน่ง</span>
+               </div>
+               <button type="button" class="verify-btn" id="verifyLocationBtn">ตรวจสอบตำแหน่ง</button>
+            </div>
+            <div class="location-details" id="locationDetails" style="display:none;"></div>
+
+            <!-- Offsite controls -->
+               <div class="offsite-controls" id="offsiteControls" style="display:none; margin-top:10px;">
+               <label style="display:flex; align-items:center; gap:8px;">
+                  <input type="checkbox" id="offsiteToggle">
+                  <span>เช็คอินนอกสถานที่</span>
+               </label>
+               <div id="offsiteNoteWrap" style="margin-top:8px; display:none;">
+                  <label for="offsiteNote">เหตุผล/สถานที่ที่ไป:</label>
+                  <textarea id="offsiteNote" rows="2" placeholder="ระบุเหตุผลหรือสถานที่ที่ไป"></textarea>
+               </div>
+               </div>
+
+            <div class="photo-status" style="margin-top:10px;">
+               <div class="status-indicator" id="photoIndicator">
+                  <span class="status-icon" id="photoIcon">📷</span>
+                  <span class="status-text" id="photoText">ยังไม่ได้ถ่ายภาพยืนยัน</span>
+               </div>
+               <div>
+                  <button type="button" class="verify-btn" id="openCameraBtn">เปิดกล้อง</button>
+                  <button type="button" class="verify-btn" id="capturePhotoBtn" style="display:none;">ถ่ายภาพ</button>
+                  <button type="button" class="close-camera-btn" id="closeCameraBtn" style="display:none;">ปิดกล้อง</button>
+               </div>
+            </div>
+
+            <div class="camera-container" id="cameraContainer" style="display:none;">
+               <video id="videoPreview" autoplay playsinline></video>
+               <div class="camera-controls">
+                  <button type="button" class="capture-btn" id="captureBtn" style="display:none;">บันทึกภาพ</button>
+               </div>
+            </div>
+
+            <div class="captured-photo" id="capturedPhotoContainer" style="display:none;">
+               <img id="capturedPhoto" alt="รูปถ่ายยืนยัน">
+               <div><button type="button" class="retake-btn" id="retakePhotoBtn">ถ่ายใหม่</button></div>
+            </div>
+      </div>
+
+       <div class="button-container">
+        <button type="button" id="checkInBtn" class="check-in-btn" disabled style="display: none;"> <span class="button-text">ลงเวลาเข้างาน</span> <span class="button-shine"></span> </button> 
+        <button type="button" id="checkOutBtn" class="check-out-btn" disabled style="display: none;"> <span class="button-text">ลงเวลาออกงาน</span> <span class="button-shine"></span> </button>
+       </div>
+      </form>
+
+ 
+      <div id="statusMsg"></div>
+     </div>
+     <div class="section-card manager-hr-table" style="display: none;">
+      <h2>รายการลงเวลา</h2>
+      <div class="export-section"><button type="button" id="exportBtn" class="sync-btn"></button> <button type="button" id="clearAllBtn" class="logout-btn">ล้างข้อมูลทั้งหมด</button>
+      </div>
+      <div style="overflow-x: auto;">
+       <table id="attendanceTable">
+        <thead>
+         <tr>
+            <th>รหัสพนักงาน</th>
+            <th>ชื่อ-นามสกุล</th>
+            <th>แผนก</th>
+            <th>ตำแหน่ง</th>
+            <th>วันที่</th>
+            <th>เวลาเข้างาน</th>
+            <th>เวลาออกงาน</th>
+            <th>ชั่วโมงทำงาน</th>
+            <th>ชั่วโมงล่วงเวลา</th>
+            <th>รวมชั่วโมงทั้งหมด</th>
+            <th>สถานะ</th>
+            <th>ประเภท</th>
+            <th>เหตุผล</th>
+            <th>พิกัด(เข้า)</th>
+            <th>รูป(เข้า)</th>
+            <th>พิกัด(ออก)</th>
+            <th>รูป(ออก)</th>
+            <th>ประเภท(ออก)</th> 
+            <th>เหตุผล(ออก)</th>  
+            <th>จัดการ</th>
+         </tr>
+        </thead>
+        <tbody></tbody>
+       </table>
+      </div>
+      
+      
+      <div class="filter-section">
+       <div><label for="filterDateStart">วันที่เริ่มต้น:</label> <input type="date" id="filterDateStart">
+       </div>
+       <div><label for="filterDateEnd">วันที่สิ้นสุด:</label> <input type="date" id="filterDateEnd">
+       </div>
+       
+       <div><label for="filterDepartment">กรองตามแผนก:</label> 
+        <select id="filterDepartment" multiple> 
+         <option value="บุคคล">บุคคล</option>
+         <option value="บริหาร">บริหาร</option>
+         <option value="เทคโนโลยีสารสนเทศ">เทคโนโลยีสารสนเทศ</option> 
+         <option value="การตลาด">การตลาด</option> 
+         <option value="ทั่วไป">ทั่วไป</option> 
+         <option value="บัญชี">บัญชี</option> 
+         <option value="ขาย">ขาย</option> 
+         <option value="ทั่วไป">ทั่วไป</option> 
+         
+        </select>
+       </div>
+       
+       <div><label for="filterStatus">กรองตามสถานะ:</label> <select id="filterStatus"> <option value="">ทุกสถานะ</option> <option value="ตรงเวลา">ตรงเวลา</option> <option value="สาย">สาย</option> <option value="ลาหยุดงาน">ลาหยุดงาน</option> </select>
+       </div>
+       
+       <div style="display: flex; align-items: end; gap: 10px;"><button type="button" id="applyFilters">กรองข้อมูล</button> <button type="button" id="clearFilters" class="settings-btn">ล้างตัวกรอง</button>
+       </div>
+      </div>
+      </div>
+    </div>
+    <div class="section-card manager-hr-stats" style="display: none;">
+     <h2>สถิติวันนี้</h2>
+     <div class="stats-grid">
+      <div class="stat-card">
+       <div class="stat-number" id="totalEmployees">
+        0
+       </div>
+       <div class="stat-label" id="totalEmployeesLabel">
+        พนักงานทั้งหมด
+       </div>
+      </div>
+      <div class="stat-card">
+       <div class="stat-number" id="onTimeCount">
+        0
+       </div>
+       <div class="stat-label">
+        มาตรงเวลา
+       </div>
+      </div>
+      <div class="stat-card">
+       <div class="stat-number" id="lateCount">
+        0
+       </div>
+       <div class="stat-label">
+        มาสาย
+       </div>
+      </div>
+      <div class="stat-card">
+       <div class="stat-number" id="absentCount">
+        0
+       </div>
+       <div class="stat-label">
+        ลาหยุดงาน
+       </div>
+      </div>
+     </div>
+     <div class="chart-container">
+      <canvas id="attendanceChart" width="400" height="200"></canvas>
+     </div>
+    </div>
+     
+     <div class="section-card manager-hr-chart" style="display: none;">
+     <h2>การเข้างานของพนักงานทั้งหมด</h2>
+     <div class="chart-controls">
+      <div style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center; margin-bottom: 20px;">
+
+        <div>
+          <label for="chartPeriodType">ช่วงเวลา:</label>
+          <select id="chartPeriodType" class="chart-date-input">
+            <option value="month">เดือนนี้</option>
+            <option value="year">ปีนี้</option>
+            <option value="custom">กำหนดเอง</option>
+          </select>
+        </div>
+
+        <div id="customDateRange" style="display:none; gap: 15px; align-items: center; flex-wrap: wrap;">
+          <div>
+            <label for="chartDateStart">วันเริ่มต้น:</label>
+            <input type="date" id="chartDateStart" class="chart-date-input">
+          </div>
+          <div>
+            <label for="chartDateEnd">วันสิ้นสุด:</label>
+            <input type="date" id="chartDateEnd" class="chart-date-input">
+          </div>
+        </div>
+
+        <button type="button" id="updateChart" class="settings-btn" style="align-self: flex-end;">อัปเดตกราฟ</button>
+      </div>
+     </div>
+      <div style="margin-bottom: 20px;">
+        <label for="performanceEmployeeFilter">เลือกพนักงาน:</label>
+        <select id="performanceEmployeeFilter" multiple></select>
+      </div>
+      <div class="chart-container">
+      <canvas id="employeePerformanceChart" width="400" height="400"></canvas>
+     </div>
+     </div>
+     
+    </div>
+    </div>
+    <div id="footerText" style="text-align: center; margin-top: 30px; color: #666; font-size: 14px;">
+     © 2024 WC_Check-In
+    </div>
+   </div><div id="loginModal" class="modal">
+    <div class="modal-content login-modal-content"><span class="close" id="loginModalClose">×</span>
+     <div class="login-header"><span class="login-icon" id="loginIcon">🔐</span>
+      <h2 id="loginTitle">เข้าสู่ระบบ</h2>
+      <p id="loginSubtitle">กรุณาใส่ข้อมูลเพื่อเข้าสู่ระบบ</p>
+     </div>
+     <form id="loginForm">
+      <div class="form-group"><label for="loginUsername">ชื่อผู้ใช้:</label> <input type="text" id="loginUsername" name="username" required placeholder="กรอกชื่อผู้ใช้">
+      </div>
+      <div class="form-group"><label for="loginPassword">รหัสผ่าน:</label> <input type="password" id="loginPassword" name="password" required placeholder="กรอกรหัสผ่าน">
+      </div>
+      <div class="login-buttons"><button type="submit" id="loginSubmitBtn" class="login-submit-btn"> <span>🔓</span> <span>เข้าสู่ระบบ</span> </button> <button type="button" id="loginCancelBtn" class="login-cancel-btn">ยกเลิก</button>
+      </div>
+      <div id="loginError" class="login-error" style="display: none;"></div>
+     </form>
+    </div>
+   </div><div id="confirmModal" class="modal">
+    <div class="modal-content"><span class="close">×</span>
+     <h2>ยืนยันการลบข้อมูล</h2>
+     <p id="confirmMessage">คุณแน่ใจหรือไม่ที่จะลบข้อมูลนี้?</p>
+     <div style="text-align: center; margin-top: 20px;"><button id="confirmDelete" class="delete-btn">ยืนยันลบ</button> <button id="cancelDelete" class="settings-btn">ยกเลิก</button>
+     </div>
+    </div>
+   </div><div id="workSummaryModal" class="modal">
+    <div class="modal-content work-summary-content">
+     <div class="work-summary-header"><span class="work-summary-icon">📊</span>
+      <h2>สรุปการทำงานวันนี้</h2>
+      <button class="countdown-timer" id="workSummaryOkBtn" style="width: auto; padding: 0 12px; height: 32px; font-size: 14px; font-weight: bold; cursor: pointer;">OK</button>
+     </div>
+     <div class="work-summary-body">
+      <div class="summary-card">
+       <div class="summary-row"><span class="summary-label">พนักงาน:</span> <span class="summary-value" id="summaryEmployeeName">-</span>
+       </div>
+       <div class="summary-row"><span class="summary-label">แผนก:</span> <span class="summary-value" id="summaryDepartment">-</span>
+       </div>
+       <div class="summary-row"><span class="summary-label">วันที่:</span> <span class="summary-value" id="summaryDate">-</span>
+       </div>
+       <div class="summary-divider"></div>
+       <div class="summary-row highlight"><span class="summary-label">เวลาเข้างาน:</span> <span class="summary-value" id="summaryCheckIn">-</span>
+       </div>
+       <div class="summary-row highlight"><span class="summary-label">เวลาออกงาน:</span> <span class="summary-value" id="summaryCheckOut">-</span>
+       </div>
+       <div class="summary-divider"></div>
+       <div class="summary-row total"><span class="summary-label">เวลาการทำงาน:</span> <span class="summary-value" id="summaryWorkHours">-</span>
+       </div>
+       <div class="summary-row total"><span class="summary-label">เวลาการทำงาน:</span> <span class="summary-value" id="summaryOvertimeHours">-</span>
+       </div>
+       <div class="summary-row grand-total"><span class="summary-label">รวมทั้งหมด:</span> <span class="summary-value" id="summaryTotalHours">-</span>
+       </div>
+       <div class="summary-row status"><span class="summary-label">สถานะ:</span> <span class="summary-value" id="summaryStatus">-</span>
+       </div>
+      </div>
+      <div class="summary-message" id="summaryMessage">
+       ขอบคุณสำหรับการทำงานหนักวันนี้! 🎉
+      </div>
+     </div>
+    </div>
+   </div>
+   <div id="messageModal" class="modal">
+  <div class="modal-content message-modal-content">
+    <span class="close" id="messageModalClose">&times;</span>
+    <div id="messageModalBody" class="message-body info">
+      </div>
+    <div style="text-align:center; margin-top: 12px;">
+      <button id="messageModalOkBtn" class="settings-btn">ตกลง</button>
+    </div>
+  </div>
+</div>
+
+<div id="editModal" class="modal">
+    <div class="modal-content login-modal-content">
+      <span class="close" id="editModalClose">×</span>
+      <div class="login-header">
+        <span class="login-icon">✏️</span>
+        <h2>แก้ไขข้อมูลการลงเวลา</h2>
+        <p id="editSubtitle">กำลังแก้ไขข้อมูลของ: -</p>
+      </div>
+      
+      <form id="editForm">
+        <input type="hidden" id="editKey">
+        
+        <div class="form-row">
+          <div class="form-group">
+            <label for="editCheckIn">เวลาเข้างาน (HH:mm):</label>
+            <input type="text" id="editCheckIn" placeholder="เช่น 08:30">
+          </div>
+          <div class="form-group">
+            <label for="editCheckOut">เวลาออกงาน (HH:mm):</label>
+            <input type="text" id="editCheckOut" placeholder="เช่น 17:30">
+          </div>
+        </div>
+        
+        <div class="form-row">
+          <div class="form-group">
+            <label for="editStatus">สถานะ:</label>
+            <select id="editStatus">
+              <option value="ตรงเวลา">ตรงเวลา</option>
+              <option value="สาย">สาย</option>
+              <option value="ลาหยุดงาน">ลาหยุดงาน</option>
+              <option value="ทำงานที่บ้าน">ทำงานที่บ้าน</option>
+              <option value="">(ล้างสถานะ)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="login-buttons">
+          <button type="submit" id="editSaveBtn" class="login-submit-btn">
+            <span>💾</span> <span>บันทึกการเปลี่ยนแปลง</span>
+          </button>
+          <button type="button" id="editCancelBtn" class="login-cancel-btn">ยกเลิก</button>
+        </div>
+        <div id="editError" class="login-error" style="display: none;"></div>
+      </form>
+    </div>
+  </div>
+
+  </main>
+  
+   <script src="script.js"></script>
+
+   <div id="settingsModal" class="modal">
+    <div class="modal-content login-modal-content">
+        <span class="close" id="settingsModalClose">×</span>
+        <div class="login-header">
+            <span class="login-icon">⚙️</span>
+            <h2>ตั้งค่าบัญชี</h2>
+            <p>เปลี่ยนชื่อผู้ใช้และรหัสผ่านของคุณ</p>
+        </div>
+        <form id="settingsForm">
+            <div class="form-group">
+                <label>ยืนยันรหัสผ่านเดิม:</label>
+                <input type="password" id="oldPassword" required placeholder="รหัสผ่านปัจจุบัน">
+            </div>
+            <hr style="margin: 15px 0; border: 0; border-top: 1px solid #eee;">
+            
+            <div class="form-group">
+                <label>ชื่อที่แสดง (Name):</label>
+                <input type="text" id="newName" required placeholder="เช่น HR สมชาย">
+            </div>
+
+            <div class="form-group">
+                <label>ชื่อผู้ใช้ใหม่ (Username):</label>
+                <input type="text" id="newUsername" required placeholder="ตั้งชื่อผู้ใช้ใหม่">
+            </div>
+            <div class="form-group">
+                <label>รหัสผ่านใหม่ (Password):</label>
+                <input type="password" id="newPassword" required placeholder="ตั้งรหัสผ่านใหม่">
+            </div>
+            <div class="form-group">
+                <label>ยืนยันรหัสผ่านใหม่:</label>
+                <input type="password" id="confirmNewPassword" required placeholder="กรอกรหัสผ่านใหม่อีกครั้ง">
+            </div>
+            <div class="login-buttons">
+                <button type="submit" id="saveSettingsBtn" class="login-submit-btn">
+                    <span>💾</span> <span>บันทึกการเปลี่ยนแปลง</span>
+                </button>
+            </div>
+            <div id="settingsError" class="login-error" style="display: none;"></div>
+        </form>
+    </div>
+</div>
+</body>
+</html>
